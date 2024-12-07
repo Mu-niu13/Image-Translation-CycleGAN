@@ -1,13 +1,14 @@
-# Makefile
+VENV := venv
 
-.PHONY: lint install clean
 
-install:
-	@pip install -r requirements.txt
+env:
+	python3.11 -m venv $(VENV)
+	. $(VENV)/bin/activate && pip install --upgrade pip && pip install -r requirements.txt
 
 lint:
-	@flake8 lib
+	. $(VENV)/bin/activate && ruff check notebook/*.ipynb lib/*.py
 
-clean:
-	@find . -name '*.pyc' -delete
-	@rm -rf __pycache__
+format:
+	. $(VENV)/bin/activate && black lib/*.py
+
+all: env lint format

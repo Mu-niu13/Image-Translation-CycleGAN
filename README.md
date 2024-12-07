@@ -1,1 +1,2 @@
-# Image-Translation-CycleGAN
+# Progressive Growing CycleGAN For High-Resolution Image Translation
+

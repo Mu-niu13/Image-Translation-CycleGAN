@@ -1,129 +1,128 @@
-# lib/models.py
-
-import torch
 import torch.nn as nn
 
-class ConvBlock(nn.Module):
-    def __init__(
-        self, in_channels, out_channels, kernel_size, stride, padding, norm=True, activation='relu'
-    ):
-        super(ConvBlock, self).__init__()
-        layers = []
-        layers.append(
-            nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=not norm)
-        )
-        if norm:
-            layers.append(nn.InstanceNorm2d(out_channels))
-        if activation == 'relu':
-            layers.append(nn.ReLU(inplace=True))
-        elif activation == 'leaky_relu':
-            layers.append(nn.LeakyReLU(0.2, inplace=True))
-        self.block = nn.Sequential(*layers)
-    
-    def forward(self, x):
-        return self.block(x)
 
 class ResidualBlock(nn.Module):
-    def __init__(self, channels):
+    def __init__(self, dim):
         super(ResidualBlock, self).__init__()
         self.block = nn.Sequential(
-            ConvBlock(channels, channels, kernel_size=3, stride=1, padding=1),
-            ConvBlock(channels, channels, kernel_size=3, stride=1, padding=1, activation=None)
+            nn.Conv2d(dim, dim, kernel_size=3, padding=1),
+            nn.InstanceNorm2d(dim),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(dim, dim, kernel_size=3, padding=1),
+            nn.InstanceNorm2d(dim),
         )
-    
+
     def forward(self, x):
         return x + self.block(x)
 
+
 class ProgressiveGenerator(nn.Module):
-    def __init__(self, start_scale=64, max_scale=256, num_residuals=6):
+    def __init__(self, input_nc, output_nc, resolution, ngf=64):
         super(ProgressiveGenerator, self).__init__()
-        self.start_scale = start_scale
-        self.max_scale = max_scale
-        self.current_scale = start_scale
-        self.num_residuals = num_residuals
-        self.models = nn.ModuleDict()
-        self._build_models()
-    
-    def _build_models(self):
-        scale = self.start_scale
-        while scale <= self.max_scale:
-            self.models[str(scale)] = self._build_model()
-            scale *= 2
-    
-    def _build_model(self):
-        model = []
-        # Initial Convolution Block
-        model.append(ConvBlock(3, 64, kernel_size=7, stride=1, padding=3))
-        # Downsampling
-        in_channels = 64
-        out_channels = in_channels * 2
-        for _ in range(2):
-            model.append(ConvBlock(in_channels, out_channels, kernel_size=3, stride=2, padding=1))
+        # resolutions list
+        res_list = [16, 32, 64, 128, 256, 512]
+        stage = res_list.index(resolution) + 1
+
+        # init block
+        self.initial = nn.Sequential(
+            nn.Conv2d(input_nc, ngf, kernel_size=7, padding=3),
+            nn.InstanceNorm2d(ngf),
+            nn.LeakyReLU(0.2, inplace=True),
+        )
+
+        # downsampling layers
+        down_layers = []
+        in_channels = ngf
+        down = stage if stage < 6 else stage - 1
+        for i in range(down):
+            out_channels = in_channels * 2
+            down_layers += [
+                nn.Conv2d(
+                    in_channels, out_channels, kernel_size=3, stride=2, padding=1
+                ),
+                nn.InstanceNorm2d(out_channels),
+                nn.LeakyReLU(0.2, inplace=True),
+            ]
             in_channels = out_channels
-            out_channels *= 2
-        # Residual Blocks
-        for _ in range(self.num_residuals):
-            model.append(ResidualBlock(in_channels))
-        # Upsampling
-        out_channels = in_channels // 2
-        for _ in range(2):
-            model.append(nn.ConvTranspose2d(
-                in_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1
-            ))
-            model.append(nn.InstanceNorm2d(out_channels))
-            model.append(nn.ReLU(inplace=True))
-            in_channels = out_channels
+        self.down = nn.Sequential(*down_layers)
+
+        # residual blocks
+        res_layers = []
+        for _ in range(stage):
+            res_layers.append(ResidualBlock(in_channels))
+        self.residual = nn.Sequential(*res_layers)
+
+        # upsampling layers
+        up_layers = []
+        up = stage if stage < 6 else stage - 1
+        for i in range(up):
             out_channels = in_channels // 2
-        # Output Layer
-        model.append(nn.Conv2d(in_channels, 3, kernel_size=7, stride=1, padding=3))
-        model.append(nn.Tanh())
-        return nn.Sequential(*model)
-    
+            up_layers += [
+                nn.ConvTranspose2d(
+                    in_channels,
+                    out_channels,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    output_padding=1,
+                ),
+                nn.InstanceNorm2d(out_channels),
+                nn.LeakyReLU(0.2, inplace=True),
+            ]
+            in_channels = out_channels
+        self.up = nn.Sequential(*up_layers)
+
+        # final layer
+        self.final = nn.Sequential(
+            nn.Conv2d(in_channels, output_nc, kernel_size=7, padding=3), nn.Tanh()
+        )
+
     def forward(self, x):
-        x = nn.functional.interpolate(x, size=(self.current_scale, self.current_scale))
-        model = self.models[str(self.current_scale)]
-        return model(x)
-    
-    def increase_scale(self):
-        if self.current_scale < self.max_scale:
-            self.current_scale *= 2
-        else:
-            print("Already at maximum scale.")
+        x = self.initial(x)
+        x = self.down(x)
+        x = self.residual(x)
+        x = self.up(x)
+        x = self.final(x)
+        return x
+
 
 class ProgressiveDiscriminator(nn.Module):
-    def __init__(self, start_scale=64, max_scale=256):
+    def __init__(self, input_nc, resolution, ndf=64):
         super(ProgressiveDiscriminator, self).__init__()
-        self.start_scale = start_scale
-        self.max_scale = max_scale
-        self.current_scale = start_scale
-        self.models = nn.ModuleDict()
-        self._build_models()
-    
-    def _build_models(self):
-        scale = self.start_scale
-        while scale <= self.max_scale:
-            self.models[str(scale)] = self._build_model()
-            scale *= 2
-    
-    def _build_model(self):
-        model = []
-        model.append(ConvBlock(3, 64, kernel_size=4, stride=2, padding=1, norm=False, activation='leaky_relu'))
-        in_channels = 64
-        out_channels = in_channels * 2
-        for _ in range(3):
-            model.append(ConvBlock(in_channels, out_channels, kernel_size=4, stride=2, padding=1, activation='leaky_relu'))
-            in_channels = out_channels
-            out_channels *= 2
-        model.append(nn.Conv2d(in_channels, 1, kernel_size=4, stride=1, padding=1))
-        return nn.Sequential(*model)
-    
-    def forward(self, x):
-        x = nn.functional.interpolate(x, size=(self.current_scale, self.current_scale))
-        model = self.models[str(self.current_scale)]
-        return model(x)
-    
-    def increase_scale(self):
-        if self.current_scale < self.max_scale:
-            self.current_scale *= 2
+        if resolution < 32:
+            disc_layers = 2
+        elif resolution < 128:
+            disc_layers = 3
         else:
-            print("Already at maximum scale.")
+            disc_layers = 4
+
+        layers = []
+        # first layer
+        layers.append(nn.Conv2d(input_nc, ndf, kernel_size=4, stride=2, padding=1))
+        layers.append(nn.LeakyReLU(0.2, inplace=True))
+
+        # second layer
+        if disc_layers > 1:
+            layers.append(nn.Conv2d(ndf, ndf * 2, kernel_size=4, stride=2, padding=1))
+            layers.append(nn.InstanceNorm2d(ndf * 2))
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
+
+        # third layer
+        if disc_layers > 2:
+            layers.append(
+                nn.Conv2d(ndf * 2, ndf * 4, kernel_size=4, stride=2, padding=1)
+            )
+            layers.append(nn.InstanceNorm2d(ndf * 4))
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
+
+        # fourth layer
+        if disc_layers > 3:
+            layers.append(nn.Conv2d(ndf * 4, 1, kernel_size=4, padding=1))
+        else:
+            final_in = ndf * (2 ** (disc_layers - 1))
+            layers.append(nn.Conv2d(final_in, 1, kernel_size=4, padding=1))
+
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.model(x)
