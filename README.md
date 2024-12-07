@@ -5,9 +5,9 @@
 Welcome to the Progressive Growing CycleGAN repository! This project explores an integration of CycleGAN with Progressive Growing GANs for high-resolution image-to-image translation. By combining these methods, we aim to achieve superior translation stability and fidelity when working with unpaired datasets.
 
 <div style="display: flex; justify-content: space-between;">
-    <img src="img/1.jpg" alt="Image 1" width="33%">
-    <img src="img/2.jpg" alt="Image 2" width="33%">
-    <img src="img/3.jpg" alt="Image 3" width="33%">
+    <img src="img/1.jpg" alt="Image 1" width="31%">
+    <img src="img/2.jpg" alt="Image 2" width="31%">
+    <img src="img/3.jpg" alt="Image 3" width="31%">
 </div>
 
 
